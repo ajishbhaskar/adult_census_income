@@ -3,8 +3,8 @@ title: "Adult Census Income Prediction"
 author: "Ajish Bhaskar"
 date: "June 5, 2019"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -365,7 +365,7 @@ error_knn
 ```
 
 
-#5.4 Comparing the Models
+#6 Results
 
 As we saw, the majority of observations in the data set has income less than $50,000 a year, sensitivity and specificity contribute to the overall accuracy.
 we can get different sensitivity and specificity for each model. For this reason, a very common approach to evaluating methods is to compare them graphically by plotting them. A commonly used plot that does this is the Receiver Operating Characteristic (ROC) curve.ROC curve is a plot of true positive rate against false positive rate under all threshold values. The different classifiers are compared using ROC curve.
@@ -415,7 +415,7 @@ colnames(auc) <- 'Area Under ROC Curve'
 round(auc, 4)
 ```
 
-#6. Conclusion
+#7. Conclusion
 As seen from the AUC, the three models performed relatively close to each other. The model built using the Logistic Regression performed best followed by KNN. The CART method gave the least accurate prediction among the three model that we did. The goal of this project was to find a model that accurately predicts if an individual makes more than $50K a year. With a higher AUC the Logistic Regression wins as the best method that we applied. Thank you! 
 
 
