@@ -1,0 +1,421 @@
+---
+title: "Adult Census Income Prediction"
+author: "Ajish Bhaskar"
+date: "June 5, 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE, echo = TRUE)
+```
+
+# 1. Introduction
+
+This documentation is my interpretaton of the data analysis and predictions done on kaggle dataset - 'Adult Census Income'. This dataset was extracted from the 1994 Census bureau database. The prediction task was to determine whether a person makes over $50K a year. I have performed three different model fitting techniques such as 'Logistic Regression', 'Classification and Regression Tree' and 'K-Nearest Neighbors' and compared the accuracy of each prediction.
+
+# 1.1. Preparations for Analysis  
+```{r libs, message = FALSE, warning = FALSE}
+#Packages and Libraries Used
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(caret)) install.packages("caret")
+if(!require(ROCR)) install.packages("ROCR")
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(tidyr)
+library(rpart)
+library(ROCR)
+```
+
+# 1.2. Read in the Dataset
+
+Prior to running the project, it is assumed that the data set 'adult.csv' is downloaded from kaggle with column header and saved in '/data' folder of the current working directory.
+```{r data_read, message = FALSE, warning = FALSE}
+adult_full <- read_csv("data/adult.csv")
+
+```
+
+# 2. Data Exploration
+Let us take a look at the structure and few sample records of the dataset 'adult_full' that we just read in.
+
+```{r head}
+str(adult_full)
+
+head(adult_full)
+```
+
+There are 32561 observation of 15 variables. 
+
+# 3. Data Wrangling
+After a brief look at the dataset, it appears that we have a few data problems that we need to address.
+
+# 3.1 Missing Data
+We can see that there are some missing data represented by "?" in the dataset. As a first set replace the "?" with NA.
+```{r replace_?}
+for (i in 1:ncol(adult_full)) {adult_full[,i][adult_full[,i] == '?',] = NA}
+```
+
+After the replace, we have to find out where the missing values are using this simple function.
+
+```{r where_NA}
+sapply(adult_full, FUN = function(adult_full_cols) {
+  table(is.na(adult_full_cols))
+})
+```
+We see that the missing values are in the columns workclass, occupation, native.country. Now let us see if the missing data in those columns are related. In census domain when we miss an attribute, it is very much possible that we miss one or more related attributes. So let us first start with workclass and occupation.
+
+```{r missing_relations, message = FALSE, warning = FALSE}
+table(which(is.na(adult_full['workclass'])) == which(is.na(adult_full['occupation'])))
+
+table(which(is.na(adult_full['workclass'])) %in% which(is.na(adult_full['occupation'])))
+
+```
+So whenever we have a NA in the workclass, we have NA in occupation most of the time.
+
+We can see that most of the missing data is from native.country 'United-States' and most of them have income less than $50K.
+```{r missing_data}
+table(adult_full[is.na(adult_full['workclass']),]$native.country)
+
+table(adult_full[is.na(adult_full['workclass']),]$income)
+
+```
+
+Let us see how any such missing values that we have to address.
+
+```{r missing_data counts}
+sum(is.na(adult_full))
+```
+
+Some models that we apply need that the predictors must not have missing values. So we are removing those from the data.
+```{r missing_data_treatment }
+adult_full <- na.omit(adult_full)
+adult_full <- data.frame(adult_full)
+
+```
+
+#3.2 Collapsing Levels
+Having looked closely at workclass, we see that we can collapse workclass to more meaningful categories.
+
+```{r collapsing_workclass, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+adult_full[adult_full$workclass %in% c("Federal-gov","Local-gov","State-gov"),"workclass"] <- "Government"     
+adult_full[adult_full$workclass %in% c("Self-emp-inc","Self-emp-not-inc"),"workclass"] <- "Self-Employed"
+adult_full[adult_full$workclass %in%  c("Never-worked","Without-pay","Other","Unknown"),"workclass"] <-"Other/Unknown"
+
+```
+
+
+Similarly we can collapse the native.country field to smaller levels. 
+```{r collapsing_country, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+adult_full[adult_full$native.country %in% c("Vietnam","Laos","Cambodia","Thailand"), "native.country"] <- "SEAsia"
+adult_full[adult_full$native.country %in% c("South"), "native.country"] <- "unknown"
+adult_full[adult_full$native.country %in% c("China","India","HongKong","Iran","Philippines","Taiwan", "Japan"),  "native.country"] <- "Asia"
+adult_full[adult_full$native.country %in% c("Canada","Mexico","Puerto-Rico","United-States"), "native.country"] <- "NorthAmerica"
+adult_full[adult_full$native.country %in% c("Ecuador","Peru","Columbia","Trinadad&Tobago", "Cuba","Dominican-Republic","Guatemala","Haiti","Honduras","Jamaica", "Nicaragua","El-Salvador"), "native.country"] <- "SouthAmerica"
+adult_full[adult_full$native.country %in% c("France","Germany","Greece","Holand-Netherlands","Italy","Hungary","Ireland", "Poland","Portugal","Scotland","England","Yugoslavia", "France"), "native.country"] <- "Europe"
+adult_full[adult_full$native.country %in% c("Outlying-US(Guam-USVI-etc)"), "native.country"] <- "Oceania"
+```
+
+We can tabularize the country data as below
+
+```{r tabularize_country }
+table(adult_full$native.country)
+```
+
+#3.3 Recoding of Variable
+For ease of analysis and prediction we will also recode 'income' to be 0 if '<=50K' or 1 otherwise. 
+
+```{r recoding_income }
+adult_full$income <- ifelse(adult_full$income == "<=50K", 0, 1)
+adult_full$income <- as.factor(adult_full$income)
+
+levels(adult_full$income)
+```
+
+
+Years of education can be discarded as we get the info from the education.num. Similarly the fnlwgt is a continous variable and is not very helpful. Same is the case with relationship as we can infer using marital status.
+
+```{r other_variables }
+adult_full$education <- NULL
+adult_full$fnlwgt <- NULL
+adult_full$relationship <- NULL
+```
+
+Let's take a look at the adult_full dataset after the data wrangling steps.
+```{r adult_full_now }
+str(adult_full)
+head(adult_full)
+```
+
+# 4. Data Analysis and Visualization
+
+As income is the outcome that we want to predict, we will explore the relationship between each variables with income.
+
+# 4.1 Age and Income
+A simple histogram of age and income reveals that yonger people appear to have lower income and the spread of higher income appears mostly between people at 40's - 50's.
+
+```{r age_hist }
+adult_full %>% ggplot(aes(age)) + 
+  geom_histogram(aes(fill=income),color='black',binwidth=1,alpha=0.5) + 
+  theme_bw() + ggtitle("Age & Income")
+
+```  
+
+We can confirm it with a box plot.
+
+```{r age_box }
+adult_full %>% ggplot() + geom_boxplot(aes(y=age,fill=income),color='black',alpha=0.5) +
+theme_bw() + ggtitle("Age & Income Boxplot")
+```
+
+#4.2 Workclass and Income
+We can see that the people in workclass 'Private' clearly stand out, using the below plot.
+
+```{r workclass_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+ggplot(adult_full,aes(workclass,group=income)) + geom_bar(aes(fill=income),color='black',alpha=0.5, position="dodge") +
+theme_bw()+   theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Workclass & Income")
+
+```
+
+#4.3 Marital Status and Income
+People with marital status 'Married-civ-spouse' clearly shows a higher propotion of income.
+
+```{r mstatus_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+ggplot(adult_full,aes(marital.status,group=income)) + geom_bar(aes(fill=income),color='black',alpha=0.5, position="dodge")+
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Marital Status & Income")
+
+```
+
+#4.4 Occupation and Income
+It is observed that people employed in 'Exec-managerial' and 'Prof-specialty' have a higher propotion of income more than 50K.
+
+```{r occupation_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+ggplot(adult_full,aes(occupation,group=income)) + geom_bar(aes(fill=income),color='black',alpha=0.5, position="dodge")+
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Occupation & Income")
+
+```
+
+#4.5 Race and Income
+People identified as 'white' have higher representation in the data collected. 
+
+```{r race_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+ggplot(adult_full,aes(race,group=income)) + geom_bar(aes(fill=income),color='black',alpha=0.5, position="dodge")+
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Race & Income")
+```
+
+#4.6 Sex and Income
+The gender male has a higher propotion of people earning more than 50K. 
+
+```{r sex_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+ggplot(adult_full,aes(sex,group=income)) + geom_bar(aes(fill=income),color='black',alpha=0.5, position="dodge")+
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Sex & Income")
+```
+
+#4.7 Native Country and Income
+The data collected has a bias to NorthAmerica, as it is from US census. So this may not be a good predictor.
+
+```{r country_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+ggplot(adult_full,aes(native.country,group=income)) + geom_bar(aes(fill=income),color='black',alpha=0.5, position="dodge")+
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Country & Income")
+
+```
+
+#4.8 Capital Gain and Income
+A quick plot of the capital gain shows that the distribution is skewed.
+
+```{r cgain_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60)}
+ggplot(adult_full,aes(capital.gain,group=income)) + geom_histogram(aes(fill=income),bins=10, color='black',alpha=0.5)+
+theme_bw() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  ggtitle("Capital Gain")
+```
+
+Also it is worth noting that more than 90% of the people have reported 0 capital gain.
+```{r cgain_0 }
+sum(adult_full$capital.gain == 0)/length(adult_full$capital.gain) * 100
+```
+
+#4.9 Capital Loss and Income
+We see a similar observation on capital loss as capital gain.
+
+```{r closs_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+ggplot(adult_full,aes(capital.loss,group=income)) + geom_histogram(aes(fill=income),bins=10, color='black',alpha=0.5)+ 
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Capital Loss")
+```
+
+Also more than 95% of the people have reported 0 capital loss 
+```{r closs_0 }
+sum(adult_full$capital.loss == 0)/length(adult_full$capital.loss) * 100
+```
+
+#4.10 Hours per week and Income
+A histogram of hours per week reveals that majority of people are working 40-50 hours per week and hence the distibution is also accordingly.  
+
+```{r hrpw_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+ggplot(adult_full,aes(hours.per.week,group=income)) + geom_histogram(aes(fill=income),bins=10, color='black',alpha=0.5)+
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Hours Per Week")
+```
+
+#4.11 Years of Eduction and Income
+It is observed that propotion of people with higher education tend to earn more than 50K than the less educated people.
+
+```{r edu_hist, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+ggplot(adult_full,aes(education.num,group=income)) + geom_histogram(aes(fill=income),bins=15, color='black',alpha=0.5) +
+theme_bw()+ theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ggtitle("Number of Years of Eduction")
+```
+
+
+#5. Model Fitting
+Before we start the actual model fitting, we will start by splitting the 'adult_full' dataset into two. 75% percent of the dataset will go to a training set known as 'adult_train' which we will use for model fitting and the remaining 25% will go to a validation set known as 'adult_test'.
+
+```{r adult_split, tidy=TRUE, tidy.opts=list(width.cutoff=60) }
+set.seed(1234)
+
+test_index <- createDataPartition(y = adult_full$income, times = 1, p = 0.25, list = FALSE)
+adult_test <- adult_full[test_index,]
+adult_train <- adult_full[-test_index,]
+```
+
+We can verify the dimensions of the two as below.
+
+```{r adult_split_dim }
+dim(adult_test) 
+
+dim(adult_train) 
+```
+
+#5.1 Classification And Regression Trees
+Let's first build our prediction model using the Classification And Regression Trees (CART) technique. We will be using the adult_train dataset to build the model and the perform the prediction of income on adult_train dataset. We will be using all the available predictors for coming up with a model to predict income. We will also find the probability of the prediction using the type "prob" for later use.
+
+```{r tree_fitting }
+tree_adult <- rpart(income ~ ., data = adult_train, method = 'class', minbucket=20)
+tree_pred <- predict(tree_adult, newdata = adult_test, type = 'class') 
+tree_pred_prob <- predict(tree_adult, adult_test, type = "prob")
+```
+
+
+Let's verify the accuracy, sensitivity and specificity using confusion matrix.
+
+```{r confusion_tree }
+confusionMatrix(adult_test$income, tree_pred)
+```
+
+Also verify the error rate by a table function using predicted object and actual income found in the test dataset.
+
+```{r tree_error }
+tab_tree <- table(tree_pred, adult_test$income)
+error_tree = 1 - sum(tab_tree[row(tab_tree)==col(tab_tree)])/sum(tab_tree)
+error_tree
+```
+
+The above results look very good. Let's plot the tree and see the predictors and decisions made.
+
+```{r tree_plot }
+plot(tree_adult, margin = 0.1)
+text(tree_adult, cex = 0.75)
+title("Classification And Regression Tree")
+```
+
+
+#5.2 Logistic Regression
+Now use the logistic regression model fitting for predicting the income in the test dataset. We will use all the predictors like before. 
+
+```{r logistic_fitting, message = FALSE, warning = FALSE}
+glm_fit <- glm(income ~ ., family = binomial(logit), data = adult_train)
+glm_pred<- predict(glm_fit, adult_test, type = "response")
+```
+
+Let's run a summary statistics and see what are the significant predictors
+
+```{r logistic_summary}
+summary(glm_fit)
+```
+
+We will also find the error rate using a table function like before.
+
+```{r logistic_error }
+tab_glm <- table(actual= adult_test$income, predicted= glm_pred>0.5)
+error_glm = 1 - sum(tab_glm[row(tab_glm)==col(tab_glm)])/sum(tab_glm)
+error_glm
+```
+As we can see, we get an improved results using logistic modeling techniques.
+
+#5.3 K-Nearest Neighbors
+Now for the last modeling, we will use the K-Nearest Neighbor (KNN). As with the previous methods we will be using all available predictors.
+
+```{r KNN_fitting, message = FALSE, warning = FALSE}
+fit_knn <- knn3(income ~ ., adult_train,  k = 5, prob=TRUE)
+knn_pred <- predict(fit_knn, adult_test, type="class")
+knn_pred_prob <- predict(fit_knn, adult_test, type = "prob")
+```
+
+Let's verify the accuracy, sensitivity and specificity using confusion matrix.
+
+```{r confusion_knn }
+confusionMatrix(adult_test$income, knn_pred)
+```
+
+Finally, verify the error rate using the table function like below. The results look pretty close to that of logistic regression.
+
+```{r knn_error }
+tab_knn <- table(knn_pred, adult_test$income)
+error_knn = 1 - sum(tab_knn[row(tab_knn)==col(tab_knn)])/sum(tab_knn)
+error_knn
+```
+
+
+#5.4 Comparing the Models
+
+As we saw, the majority of observations in the data set has income less than $50,000 a year, sensitivity and specificity contribute to the overall accuracy.
+we can get different sensitivity and specificity for each model. For this reason, a very common approach to evaluating methods is to compare them graphically by plotting them. A commonly used plot that does this is the Receiver Operating Characteristic (ROC) curve.ROC curve is a plot of true positive rate against false positive rate under all threshold values. The different classifiers are compared using ROC curve.
+
+Inorder to plot the curves, let's create prediction objects and dataframes for True Positives (TP) and False Positives (FP) for the three models.
+
+```{r build_ROC_objects }
+#Create a prediction object & dataframe for Logistic
+pr <- prediction(glm_pred, adult_test$income)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+dd <- data.frame(FP = prf@x.values[[1]], TP = prf@y.values[[1]])
+
+#Create a prediction object & dataframe for CART
+pr2 <- prediction(tree_pred_prob[,2], adult_test$income)
+prf2 <- performance(pr2, measure = "tpr", x.measure = "fpr")
+dd2 <- data.frame(FP = prf2@x.values[[1]], TP = prf2@y.values[[1]])
+
+#Create a prediction object & dataframe for KNN
+pr3 <- prediction(knn_pred_prob[,2], adult_test$income)
+prf3 <- performance(pr3, measure = "tpr", x.measure = "fpr")
+dd3 <- data.frame(FP = prf3@x.values[[1]], TP = prf3@y.values[[1]])
+
+```
+
+Plot the curves using geom_line with the data frames built above.
+
+```{r plot_ROC }
+# plot ROC curves for the three prediction objects
+ggplot() + 
+  geom_line(data = dd, aes(x = FP, y = TP, color = 'Logistic Regression')) +
+  geom_line(data = dd2, aes(x = FP, y = TP, color = 'CART')) +
+  geom_line(data = dd3, aes(x = FP, y = TP, color = 'KNN')) +
+  ggtitle('ROC Curve') + 
+  labs(x = 'False Positive Rate', y = 'True Positive Rate') 
+```
+
+Now we will find the Area Under the ROCs Curve (AUC) which is a performance measurement for classification problem at various thresholds settings. ROC is a probability curve and AUC represents degree or measure of separability. It tells how much model is capable of distinguishing between classes. Higher the AUC, better the model is.
+
+```{r AUC_ROC }
+# Area Under ROC curve represents the accuracy
+auc <- rbind( performance(pr, measure = 'auc')@y.values[[1]],
+              performance(pr2, measure = 'auc')@y.values[[1]],
+              performance(pr3, measure = 'auc')@y.values[[1]]
+              )
+rownames(auc) <- (c('Logistic Regression', 'CART', 'KNN'))
+colnames(auc) <- 'Area Under ROC Curve'
+round(auc, 4)
+```
+
+#6. Conclusion
+As seen from the AUC, the three models performed relatively close to each other. The model built using the Logistic Regression performed best followed by KNN. The CART method gave the least accurate prediction among the three model that we did. The goal of this project was to find a model that accurately predicts if an individual makes more than $50K a year. With a higher AUC the Logistic Regression wins as the best method that we applied. Thank you! 
+
+
